@@ -5,3 +5,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 site/data/
+
+# OpenStreetMap download cache for tools/build_tro_bays.py
+manual/*/osm_cache.json
+manual/*/kerb_cache.json

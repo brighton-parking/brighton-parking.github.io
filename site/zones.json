@@ -12,13 +12,13 @@
       "facts": [
         ["Permit bays", "Zone 14 permit holders only. Some on Hollingdean Terrace are loading only Mon–Sat 8am–5pm."],
         ["Shared bays", "Pay, or park free with a Zone 14 permit. Max stay 4 hr, no return within 4 hr. On Davey Drive, Dudley Road, Hollingbury Crescent, Hollingbury Place, Hollingdean Terrace, Horton Road, Roedale Road, The Crossway and The Linkway."],
-        ["Paid bays", "Max stay 4 hr on Hollingbury Place (no return within 4 hr), 12 hr on Upper Hollingdean Road"],
+        ["Paid bays", "Max stay 2 hr on Hollingbury Place (no return within 4 hr), 12 hr on Upper Hollingdean Road"],
         ["Elsewhere", "Double yellow lines: no waiting at any time"]
       ],
       "price_band": "low",
       "max_stay_mins": 240,
-      "source": "https://www.brighton-hove.gov.uk/current-tros",
-      "source_label": "Traffic order TRO-16-2025"
+      "source": "https://tro.tpt.gov.uk/TRO/Brighton%20and%20Hove/912-CPZ-Amend-4-2026-TRO16a2025.pdf",
+      "source_label": "traffic order TRO-16a-2025"
     }
   }
 }

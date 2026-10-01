@@ -1,0 +1,23 @@
+{
+  "zone": "14",
+  "order": "TRO-16a-2025",
+  "order_title": "Brighton & Hove Various Controlled Parking Zones Consolidation Order 2024 Amendment Order No.4 2026",
+  "order_url": "https://tro.tpt.gov.uk/TRO/Brighton%20and%20Hove/912-CPZ-Amend-4-2026-TRO16a2025.pdf",
+  "in_force": "2026-04-13",
+  "bbox": [50.834, -0.138, 50.848, -0.118],
+  "parts": {
+    "4.13": { "type": "permit", "days": "Mon to Sun", "times": "8 am to 8 pm" },
+    "5.14": { "type": "shared", "tariff": "Low", "max_stay": "4hrs", "no_return": "4hrs", "days": "Mon to Sun", "times": "8 am to 8 pm" },
+    "6.9": { "type": "paid", "tariff": "Low", "max_stay": "2hrs", "no_return": "4hrs", "days": "Mon to Sun", "times": "8 am to 8 pm" },
+    "6.10": { "type": "paid", "tariff": "Low", "price_band": "low-12hr", "max_stay": "12hrs", "days": "Mon to Sun", "times": "8 am to 8 pm" }
+  },
+  "half_width_m": {
+    "default": 3.3,
+    "Upper Hollingdean Road": 4.0,
+    "Hollingdean Road": 4.0,
+    "Hollingbury Road": 3.5,
+    "Ditchling Road": 5.0
+  },
+  "bay_depth_m": 2.0,
+  "echelon_depth_m": 4.8
+}

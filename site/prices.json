@@ -7,6 +7,11 @@
       "label": "Low tariff",
       "rates": { "60": 1.80, "120": 3.50, "240": 6.70, "360": 7.50, "660": 9.50 }
     },
+    "low-12hr": {
+      "label": "Low tariff",
+      "note": "Zone 14's long-stay bays allow 12 hours instead of 11. Its traffic order (TRO-16a-2025) priced 12 hours there the same as 11 hours elsewhere, so this assumes that still holds.",
+      "rates": { "60": 1.80, "120": 3.50, "240": 6.70, "360": 7.50, "720": 9.50 }
+    },
     "medium": {
       "label": "Medium tariff",
       "rates": { "60": 4.90, "120": 9.00, "240": 14.00, "360": 16.00, "660": 20.00 }

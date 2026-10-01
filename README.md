@@ -13,7 +13,7 @@ A free, mobile-friendly map of every on-street paid, permit and shared-use parki
 - **Search** for a street, venue or postcode to jump straight there.
 - **Plan a stay.** Choose where you're going, the date, your arrival time and how long you'll stay. The app lists the cheapest bays nearby where you could legally stay the whole time without moving the car. It takes into account charging hours, maximum stays, permit hours and seasonal seafront prices.
 - **Set your permit zone.** If you have a resident permit, choose your zone. Bays your permit covers are then shown as available, and the planner counts them as free. This is saved on your device only.
-- **New zones are flagged.** Where the council has started a new parking zone but not yet published where its bays are (currently South Hollingdean, Zone 14), the area is hatched. Tap it to see the zone's hours and rules.
+- **New zones are covered.** Where the council has started a new parking zone but not yet published where its bays are, the area is hatched. Tap it to see the zone's hours and rules. For South Hollingdean (Zone 14), the bays have been drawn from the council's traffic order instead, so their positions are approximate.
 - **Install it like an app.** On your phone, use "Add to Home Screen".
 
 ## Please check the signs

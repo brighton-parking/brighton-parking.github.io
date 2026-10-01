@@ -404,6 +404,7 @@ function renderSheet(id) {
   if (p.pay_by_phone) facts.push(["PayByPhone", `<span class="pbp"><code>${esc(p.pay_by_phone)}</code>
       <button class="btn" data-copy="${esc(p.pay_by_phone)}">Copy</button></span>`]);
 
+  const fromOrder = p.source === "traffic_order";
   const [lon, lat] = p.centroid;
   const isApple = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent) && "ontouchend" in document;
   const directions = isApple
@@ -419,9 +420,13 @@ function renderSheet(id) {
     </div>
     ${typeof planCardBody === "function" ? planCardBody(id) : ""}
     <dl class="facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>
+    ${fromOrder ? `<div class="warn">The council hasn't mapped this zone's bays yet, so this one was drawn from its traffic order.
+      Its position is approximate, to within a few metres, so check the signs.</div>` : ""}
     ${p.issues ? `<div class="warn">Some of the council's data for this bay was unclear or missing, so double-check the signs.</div>` : ""}
     <div class="actions"><a class="btn primary" href="${directions}" target="_blank" rel="noopener">Directions</a></div>
-    <p class="fine">From Brighton & Hove City Council data. Signs on the street always take precedence.</p>`;
+    <p class="fine">${fromOrder
+      ? `From the council's <a href="${esc(p.source_url)}" target="_blank" rel="noopener">traffic order</a>: ${esc(p.source_text)}.`
+      : "From Brighton & Hove City Council data."} Signs on the street always take precedence.</p>`;
   $("sheet").dataset.view = "bay";
   $("sheet").hidden = false;
 }

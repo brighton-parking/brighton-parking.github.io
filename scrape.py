@@ -10,6 +10,8 @@ Outputs (in ./data):
   parking_bays.csv          same attributes, no geometry (centroid lat/lon)
   metadata.json             source URLs, fetch time, counts, parse issues
   unmapped_zones.geojson    controlled parking zones with no bays in the data yet (e.g. a new zone)
+Bays drawn by hand from a traffic order (manual/<zone>/bays.geojson, see tools/build_tro_bays.py)
+are added for any zone the council's data has no bays for yet.
 and copies parking_bays.geojson, unmapped_zones.geojson + metadata.json into site/data for the web app.
 """
 
@@ -37,6 +39,7 @@ OUT = Path(__file__).parent / "data"
 SITE_DATA = Path(__file__).parent / "site" / "data"   # copy served by the web app
 PRICES = Path(__file__).parent / "site" / "prices.json"  # hand-maintained tariff table
 ZONES = Path(__file__).parent / "site" / "zones.json"    # hand-maintained notes on zones whose bays aren't mapped
+MANUAL = Path(__file__).parent / "manual"                # bays drawn from traffic orders, per zone
 DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
@@ -372,6 +375,20 @@ def unmapped_zones(bay_features, notes):
     return out
 
 
+def traffic_order_bays(council_features):
+    """Hand-drawn bays for zones the council hasn't mapped, dropped once its own bays appear."""
+    zoned = {z.strip() for f in council_features for z in (f["properties"]["zone"] or "").split("&")}
+    out = []
+    for path in sorted(MANUAL.glob("*/bays.geojson")):
+        fc = json.loads(path.read_text(encoding="utf-8"))
+        if fc["zone"] in zoned:
+            print(f"  zone {fc['zone']}: council data now has bays, ignoring {path}", flush=True)
+            continue
+        out.extend(fc["features"])
+        print(f"  zone {fc['zone']}: {len(fc['features'])} bays drawn from {fc['order']}", flush=True)
+    return out
+
+
 # --------------------------------------------------------------------------- main
 
 def main():
@@ -391,6 +408,10 @@ def main():
                 issue_log.append({"id": f["id"], "issues": f["properties"]["issues"]})
         all_features.extend(feats)
         print(f"  {len(feats)} bays", flush=True)
+
+    drawn = traffic_order_bays(all_features)
+    counts["traffic_order"] = len(drawn)
+    all_features.extend(drawn)
 
     fc = {"type": "FeatureCollection", "features": all_features}
     (OUT / "parking_bays.geojson").write_text(json.dumps(fc, separators=(",", ":")), encoding="utf-8")
