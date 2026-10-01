@@ -111,6 +111,27 @@ function distanceTo(geom, lon0, lat0) {
   return best;
 }
 
+/** Is the point inside the polygon? Even-odd over every ring, so holes count as outside. */
+function insidePolygon(geom, lon, lat) {
+  const polys = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
+  let inside = false;
+  for (const ring of polys.flat()) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/** A zone with no mapped bays at or within `radius` m of the point: its bays can't be in the results. */
+function unmappedZoneNear(lon, lat, radius) {
+  for (const z of unmapped.values()) {
+    if (insidePolygon(z.g, lon, lat) || distanceTo(z.g, lon, lat) <= radius) return z;
+  }
+  return null;
+}
+
 /** Arrival date/time -> { s, e } in week-minutes from the Monday of that week, plus the date. */
 function stayContext({ date, time, dur }) {
   const [y, m, d] = date.split("-").map(Number);
@@ -399,9 +420,13 @@ function showPlanResults() {
     body = `<div class="plan-summary"><b>${head}</b><span>${esc(sub)}</span></div>
       <ol class="options">${options.slice(0, 8).map(optionHtml).join("")}${extra.slice(0, 3).map(optionHtml).join("")}</ol>`;
   }
+  const gap = unmappedZoneNear(planner.origin.lon, planner.origin.lat, planner.inputs.radius);
+  const gapWarn = gap ? `<div class="warn">Zone ${esc(gap.p.zone)}${gap.p.name ? ` (${esc(gap.p.name)})` : ""} is nearby,
+    but the council hasn't mapped its bays yet, so they're missing from these results. Tap the hatched area for its rules.</div>` : "";
   $("sheet-body").innerHTML = `
     <h2>Your stay</h2>
     <div class="sub">${esc(label)}</div>
+    ${gapWarn}
     ${body}
     <div class="actions">
       <button class="btn" data-act="edit">Change</button>

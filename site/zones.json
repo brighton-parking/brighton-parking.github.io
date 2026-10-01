@@ -1,0 +1,24 @@
+{
+  "notes": "Hand-maintained. scrape.py writes every controlled parking zone that has no bays in the council's bay data to site/data/unmapped_zones.geojson, adding the details below so the map can show what the zone's traffic order says. Once the council adds a zone's bays, the scrape stops flagging it and its entry here can be deleted. Zones under 'skip' never have regular bays.",
+  "skip": {
+    "B": "Event-day permit area around the stadium, no regular bays",
+    "D": "Event-day permit area around the stadium, no regular bays"
+  },
+  "zones": {
+    "14": {
+      "name": "South Hollingdean",
+      "since": "2026-04-13",
+      "schedule": [{ "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "start": "08:00", "end": "20:00" }],
+      "facts": [
+        ["Permit bays", "Zone 14 permit holders only. Some on Hollingdean Terrace are loading only Mon–Sat 8am–5pm."],
+        ["Shared bays", "Pay, or park free with a Zone 14 permit. Max stay 4 hr, no return within 4 hr. On Davey Drive, Dudley Road, Hollingbury Crescent, Hollingbury Place, Hollingdean Terrace, Horton Road, Roedale Road, The Crossway and The Linkway."],
+        ["Paid bays", "Max stay 4 hr on Hollingbury Place (no return within 4 hr), 12 hr on Upper Hollingdean Road"],
+        ["Elsewhere", "Double yellow lines: no waiting at any time"]
+      ],
+      "price_band": "low",
+      "max_stay_mins": 240,
+      "source": "https://www.brighton-hove.gov.uk/current-tros",
+      "source_label": "Traffic order TRO-16-2025"
+    }
+  }
+}

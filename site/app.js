@@ -4,6 +4,7 @@
 const BRIGHTON = [-0.1372, 50.8262];
 const BASEMAP = "https://tiles.openfreemap.org/styles/positron";
 const DATA_URL = "data/parking_bays.geojson";
+const ZONES_URL = "data/unmapped_zones.geojson";   // controlled zones whose bays the council hasn't mapped yet
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const DAY_NAME = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
 const WEEK = 7 * 1440;
@@ -11,6 +12,7 @@ const POINTS_MAX_ZOOM = 15.5;   // below this, bays are drawn as dots; above, as
 
 const css = getComputedStyle(document.documentElement);
 const COLOR = Object.fromEntries(["free", "pay", "shared", "permit", "unknown"].map(k => [k, css.getPropertyValue(`--${k}`).trim()]));
+COLOR.mine = COLOR.free;
 
 const TYPE_TITLE = { paid: "Paid parking bay", permit: "Permit holders bay", shared: "Shared use bay" };
 const STATUS_TEXT = {
@@ -25,7 +27,9 @@ const STATUS_TEXT = {
 const $ = id => document.getElementById(id);
 const bays = new Map();         // id -> { p: properties, g: geometry, iv: [[start, end], ...] week-minute intervals | null, status }
 let prices = null;              // site/prices.json, if it loaded
+const unmapped = new Map();     // zone code -> { p: properties (from zones.json), g: geometry, iv }
 let selectedId = null;
+let selectedZone = null;
 let searchMarker = null;
 
 // ---------------------------------------------------------------- my permit zone (saved on this device)
@@ -184,6 +188,7 @@ const dataReady = fetch(DATA_URL).then(r => {
   if (!r.ok) throw new Error(r.status);
   return r.json();
 });
+const zonesReady = fetch(ZONES_URL).then(r => r.ok ? r.json() : null).catch(() => null);
 
 map.on("load", async () => {
   let fc;
@@ -223,6 +228,7 @@ map.on("load", async () => {
       "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 3.5, 0],
     },
   });
+  addUnmappedZones(await zonesReady, "bays-fill");
   map.addLayer({
     id: "bays-points", type: "circle", source: "points", maxzoom: POINTS_MAX_ZOOM,
     paint: {
@@ -246,6 +252,27 @@ map.on("load", async () => {
     .catch(() => {});
 });
 
+/** Hatch the zones whose bays aren't in the data, so an empty patch of map doesn't read as "no restrictions". */
+function addUnmappedZones(fc, before) {
+  if (!fc?.features.length) return;
+  for (const f of fc.features) unmapped.set(f.properties.zone, { p: f.properties, g: f.geometry, iv: compile(f.properties.schedule) });
+
+  const size = 16, c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  g.strokeStyle = COLOR.unknown;
+  g.lineWidth = 2.5;
+  for (const o of [-size, 0, size]) { g.beginPath(); g.moveTo(o, size); g.lineTo(o + size, 0); g.stroke(); }
+  map.addImage("hatch", g.getImageData(0, 0, size, size), { pixelRatio: 2 });
+
+  map.addSource("unmapped-zones", { type: "geojson", data: fc });
+  map.addLayer({ id: "zones-fill", type: "fill", source: "unmapped-zones", paint: { "fill-pattern": "hatch", "fill-opacity": 0.45 } }, before);
+  map.addLayer({
+    id: "zones-line", type: "line", source: "unmapped-zones",
+    paint: { "line-color": COLOR.unknown, "line-width": 1.5, "line-dasharray": [3, 2] },
+  }, before);
+}
+
 /** Recompute every bay's status for the current London time and repaint the ones that changed. */
 function refresh() {
   const wm = weekMinute();
@@ -259,6 +286,7 @@ function refresh() {
   }
   $("clock").textContent = `Now · ${DAY_NAME[DAYS[Math.floor(wm / 1440)]]} ${clock(wm % 1440)}`;
   if (selectedId) renderSheet(selectedId);
+  else if (selectedZone) renderZoneSheet(selectedZone);
 }
 
 // ---------------------------------------------------------------- tapping a bay
@@ -271,7 +299,10 @@ map.on("click", e => {
     const pad = 18;
     hits = map.queryRenderedFeatures([[x - pad, y - pad], [x + pad, y + pad]], { layers: ["bays-fill", "bays-points"] });
   }
-  if (!hits.length) return closeSheet();
+  if (!hits.length) {
+    const zone = map.getLayer("zones-fill") && map.queryRenderedFeatures(e.point, { layers: ["zones-fill"] })[0];
+    return zone ? selectZone(zone.properties.zone) : closeSheet();
+  }
 
   let best = null, bestD = Infinity;
   for (const f of hits) {
@@ -282,7 +313,7 @@ map.on("click", e => {
   select(best);
 });
 
-for (const layer of ["bays-fill", "bays-points"]) {
+for (const layer of ["bays-fill", "bays-points", "zones-fill"]) {
   map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
   map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
 }
@@ -290,6 +321,7 @@ for (const layer of ["bays-fill", "bays-points"]) {
 function select(id) {
   if (selectedId) map.setFeatureState({ source: "bays", id: selectedId }, { selected: false });
   selectedId = id;
+  selectedZone = null;
   map.setFeatureState({ source: "bays", id }, { selected: true });
   renderSheet(id);
 
@@ -301,9 +333,10 @@ function select(id) {
 }
 
 function closeSheet() {
-  const wasBay = $("sheet").dataset.view === "bay";
+  const wasBay = ["bay", "zone"].includes($("sheet").dataset.view);
   if (selectedId) map.setFeatureState({ source: "bays", id: selectedId }, { selected: false });
   selectedId = null;
+  selectedZone = null;
   // With a plan active, closing a bay card goes back to the plan results.
   if (wasBay && typeof planner !== "undefined" && planner.active) return showPlanResults();
   $("sheet").hidden = true;
@@ -390,6 +423,57 @@ function renderSheet(id) {
     <div class="actions"><a class="btn primary" href="${directions}" target="_blank" rel="noopener">Directions</a></div>
     <p class="fine">From Brighton & Hove City Council data. Signs on the street always take precedence.</p>`;
   $("sheet").dataset.view = "bay";
+  $("sheet").hidden = false;
+}
+
+// ---------------------------------------------------------------- tapping a zone with no mapped bays
+
+function selectZone(code) {
+  if (selectedId) map.setFeatureState({ source: "bays", id: selectedId }, { selected: false });
+  selectedId = null;
+  selectedZone = code;
+  renderZoneSheet(code);
+}
+
+function renderZoneSheet(code) {
+  const { p, iv } = unmapped.get(code);
+  const wm = weekMinute();
+  let status = "unknown", head = "Bays not mapped yet", detail = "";
+  if (iv) {
+    const d = minutesToChange(iv, wm);
+    const when = d != null ? whenText(wm, d) : null;
+    if (!restrictedAt(iv, wm)) {
+      [status, head, detail] = ["free", "Free to park in bays now", when ? `Restrictions start ${when}` : ""];
+    } else if (myZone === code) {
+      [status, head, detail] = ["mine", STATUS_TEXT.mine, `In permit and shared bays${when ? ` · Restrictions end ${when}` : ""}`];
+    } else {
+      [status, head, detail] = ["shared", "Pay in shared or paid bays now",
+        `Permit bays are for Zone ${code} permit holders${when ? ` · Free from ${when}` : ""}`];
+    }
+  }
+
+  const since = p.since && new Date(p.since).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  const facts = [];
+  if (p.schedule) facts.push(["Hours", hoursLines(p.schedule).map(esc).join("<br>")]);
+  for (const [k, v] of p.facts || []) facts.push([k, esc(v)]);
+  const price = priceInfo(p);
+  if (price) {
+    facts.push(["Prices", `<table class="prices">${price.rows.map(([d, v]) =>
+      `<tr><td>up to ${esc(d)}</td><td>${money(v)}</td></tr>`).join("")}</table>`]);
+  }
+
+  $("sheet-body").innerHTML = `
+    ${typeof planCardTop === "function" ? planCardTop() : ""}
+    <h2>Zone ${esc(code)}${p.name ? ` · ${esc(p.name)}` : ""}</h2>
+    <div class="sub">${since ? `Controlled parking zone since ${esc(since)}` : "Controlled parking zone"}</div>
+    <div class="status" style="--c:${COLOR[status]}">
+      <i></i><div><b>${esc(head)}</b>${detail ? `<span>${esc(detail)}</span>` : ""}</div>
+    </div>
+    <div class="warn">The council hasn't added this zone's bays to its data yet, so they aren't on the map.
+      ${facts.length ? "These details are from the zone's traffic order. " : ""}Check the signs for where the bays are and what they allow.</div>
+    ${facts.length ? `<dl class="facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>` : ""}
+    <p class="fine">${p.source ? `From the council's <a href="${esc(p.source)}" target="_blank" rel="noopener">${esc(p.source_label || "traffic order")}</a>. ` : ""}Signs on the street always take precedence.</p>`;
+  $("sheet").dataset.view = "zone";
   $("sheet").hidden = false;
 }
 
@@ -487,6 +571,7 @@ function allZones() {
     if (p.type === "paid" || !p.zone) continue;
     for (const z of p.zone.split("&")) if (z.trim() && z.trim() !== "NA") zones.add(z.trim());
   }
+  for (const z of unmapped.keys()) zones.add(z);
   return [...zones].sort((a, b) => (/^\d/.test(a) - /^\d/.test(b)) || a.localeCompare(b, "en", { numeric: true }));
 }
 
@@ -500,6 +585,7 @@ function updatePermitChrome() {
 function openPermitPicker() {
   if (selectedId) map.setFeatureState({ source: "bays", id: selectedId }, { selected: false });
   selectedId = null;
+  selectedZone = null;
   const zones = allZones();
   $("sheet-body").innerHTML = `
     <h2>My permit zone</h2>

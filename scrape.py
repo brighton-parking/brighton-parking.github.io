@@ -9,7 +9,8 @@ Outputs (in ./data):
   parking_bays.geojson      all bays, cleaned + structured schedule
   parking_bays.csv          same attributes, no geometry (centroid lat/lon)
   metadata.json             source URLs, fetch time, counts, parse issues
-and copies parking_bays.geojson + metadata.json into site/data for the web app.
+  unmapped_zones.geojson    controlled parking zones with no bays in the data yet (e.g. a new zone)
+and copies parking_bays.geojson, unmapped_zones.geojson + metadata.json into site/data for the web app.
 """
 
 import csv
@@ -29,10 +30,13 @@ LAYERS = {
     60: "permit",   # Permit Holders Only
     62: "shared",   # Shared Permit Or Paid Parking
 }
+ZONES_SERVICE = "https://gis.brighton-hove.gov.uk/server/rest/services/Parking/Parking_ParkingZones/FeatureServer"
+ZONES_LAYER = 39   # Parking Zones (boundaries)
 PAGE = 1000
 OUT = Path(__file__).parent / "data"
 SITE_DATA = Path(__file__).parent / "site" / "data"   # copy served by the web app
 PRICES = Path(__file__).parent / "site" / "prices.json"  # hand-maintained tariff table
+ZONES = Path(__file__).parent / "site" / "zones.json"    # hand-maintained notes on zones whose bays aren't mapped
 DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
@@ -51,13 +55,13 @@ def get_json(url, params, retries=3):
             time.sleep(2 * (attempt + 1))
 
 
-def fetch_layer(layer_id):
+def fetch_layer(layer_id, service=SERVICE):
     """All records of a layer in their native British National Grid (EPSG:27700), as Esri JSON.
 
     We deliberately don't ask the server for WGS84 (outSR=4326): it converts without an
     OSGB36 -> WGS84 datum transformation, which shifts everything ~128 m north-west.
     """
-    url = f"{SERVICE}/{layer_id}/query"
+    url = f"{service}/{layer_id}/query"
     expected = get_json(url, {"where": "1=1", "returnCountOnly": "true", "f": "json"})["count"]
     features, offset = [], 0
     while True:
@@ -348,6 +352,26 @@ def normalise(feature, bay_type):
     return {"type": "Feature", "id": props["id"], "geometry": geom, "properties": props}
 
 
+def unmapped_zones(bay_features, notes):
+    """Zone boundaries that contain no mapped bays, e.g. a new zone the council hasn't drawn bays for yet.
+
+    Zones listed under "skip" in zones.json (event-day areas) never have regular bays, so they're left out.
+    """
+    raw = fetch_layer(ZONES_LAYER, ZONES_SERVICE)
+    zoned = {z.strip() for f in bay_features for z in (f["properties"]["zone"] or "").split("&")}
+    out = []
+    for feature in raw["features"]:
+        code = clean(feature["attributes"].get("ZoneCode"))
+        if not code or code in zoned or code in notes["skip"] or not feature.get("geometry"):
+            continue
+        f = esri_to_geojson(feature)
+        f["geometry"]["coordinates"] = round_coords(f["geometry"]["coordinates"])
+        f["id"] = code
+        f["properties"] = {"zone": code, **notes["zones"].get(code, {})}
+        out.append(f)
+    return out
+
+
 # --------------------------------------------------------------------------- main
 
 def main():
@@ -371,6 +395,12 @@ def main():
     fc = {"type": "FeatureCollection", "features": all_features}
     (OUT / "parking_bays.geojson").write_text(json.dumps(fc, separators=(",", ":")), encoding="utf-8")
 
+    print("fetching zone boundaries ...", flush=True)
+    zones = unmapped_zones(all_features, json.loads(ZONES.read_text(encoding="utf-8")))
+    zfc = {"type": "FeatureCollection", "features": zones}
+    (OUT / "unmapped_zones.geojson").write_text(json.dumps(zfc, separators=(",", ":")), encoding="utf-8")
+    print(f"  zones with no mapped bays: {', '.join(f['id'] for f in zones) or 'none'}", flush=True)
+
     cols = ["id", "type", "zone", "red_route", "tariff", "price_band", "pay_by_phone", "max_stay_mins", "no_return_mins",
             "schedule", "days_raw", "times_raw", "lat", "lon", "area_m2", "source_objectid", "issues"]
     with open(OUT / "parking_bays.csv", "w", newline="", encoding="utf-8") as fh:
@@ -387,8 +417,10 @@ def main():
         "source": SERVICE,
         "layers": {str(k): v for k, v in LAYERS.items()},
         "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "zones_source": f"{ZONES_SERVICE}/{ZONES_LAYER}",
         "counts": counts,
         "total": len(all_features),
+        "unmapped_zones": [f["id"] for f in zones],
         "records_with_issues": len(issue_log),
         "issues": issue_log,
         "notes": "Coordinates are WGS84 (EPSG:4326), converted locally from British National Grid. 'schedule' lists when the restriction applies; "
@@ -396,7 +428,7 @@ def main():
     }
     (OUT / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     SITE_DATA.mkdir(parents=True, exist_ok=True)
-    for name in ("parking_bays.geojson", "metadata.json"):
+    for name in ("parking_bays.geojson", "unmapped_zones.geojson", "metadata.json"):
         shutil.copy(OUT / name, SITE_DATA / name)
     print(f"done: {len(all_features)} bays, {len(issue_log)} flagged -> {OUT}")
 
