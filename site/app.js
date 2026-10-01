@@ -14,7 +14,7 @@ const WEEK = 7 * 1440;
 const POINTS_MAX_ZOOM = 15.5;   // below this, bays are drawn as dots; above, as shapes
 
 const css = getComputedStyle(document.documentElement);
-const COLOR = Object.fromEntries(["free", "pay", "shared", "permit", "unknown", "moto", "zone"].map(k => [k, css.getPropertyValue(`--${k}`).trim()]));
+const COLOR = Object.fromEntries(["free", "pay", "shared", "permit", "unknown", "moto", "moto-edge", "zone"].map(k => [k, css.getPropertyValue(`--${k}`).trim()]));
 COLOR.mine = COLOR.free;
 
 const TYPE_TITLE = { paid: "Paid parking bay", permit: "Permit holders bay", shared: "Shared use bay" };
@@ -708,17 +708,22 @@ $("sheet-body").addEventListener("click", e => {
 
 // ---------------------------------------------------------------- legend filter
 
-const LEGEND_NAME = { free: "free", pay: "pay", shared: "pay or permit", permit: "permit-only" };
+const LEGEND_NAME = { free: "free", pay: "pay", shared: "pay or permit", permit: "permit-only", moto: "motorcycle" };
 
 function syncLegend() {
   for (const b of document.querySelectorAll(".legend [data-cat]")) {
-    const off = view.hidden.includes(b.dataset.cat);
+    // Motorcycle bays are a separate layer, off until asked for; the rest are bay statuses.
+    const off = b.dataset.cat === "moto" ? !view.moto : view.hidden.includes(b.dataset.cat);
     b.classList.toggle("off", off);
     b.setAttribute("aria-pressed", String(!off));
   }
 }
 
 function toggleCategory(cat) {
+  if (cat === "moto") {
+    setLayer("moto", !view.moto);
+    return toast(view.moto ? "Showing motorcycle bays" : "Hiding motorcycle bays. Tap again to show them");
+  }
   const off = !view.hidden.includes(cat);
   view.hidden = off ? [...view.hidden, cat] : view.hidden.filter(c => c !== cat);
   saveView();
@@ -786,11 +791,11 @@ function addMotoLayers(fc) {
   const beforeLabels = map.getStyle().layers.find(l => l.type === "symbol")?.id;
   map.addLayer({
     id: "moto-fill", type: "fill", source: "moto", minzoom: POINTS_MAX_ZOOM - 0.5,
-    paint: { "fill-color": COLOR.moto, "fill-opacity": 0.6 },
+    paint: { "fill-color": COLOR.moto, "fill-opacity": 0.75 },
   }, beforeLabels);
   map.addLayer({
     id: "moto-line", type: "line", source: "moto", minzoom: POINTS_MAX_ZOOM - 0.5,
-    paint: { "line-color": COLOR.moto, "line-width": ["interpolate", ["linear"], ["zoom"], 15, 1, 19, 2.5] },
+    paint: { "line-color": COLOR["moto-edge"], "line-width": ["interpolate", ["linear"], ["zoom"], 15, 1, 19, 2] },
   }, beforeLabels);
   map.addLayer({
     id: "moto-selected", type: "line", source: "moto",
@@ -800,9 +805,10 @@ function addMotoLayers(fc) {
     id: "moto-points", type: "circle", source: "moto-points", maxzoom: POINTS_MAX_ZOOM,
     paint: {
       "circle-color": COLOR.moto,
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 1.5, 13, 2.5, 15.5, 5],
-      "circle-stroke-color": "#fff",
-      "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 12, 0, 14, 0.8],
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 2, 13, 3, 15.5, 5.5],
+      // A dark edge, as a light dot would vanish against the pale basemap.
+      "circle-stroke-color": COLOR["moto-edge"],
+      "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 11, 0.6, 14, 1.2],
     },
   });
   for (const layer of ["moto-fill", "moto-points"]) {
@@ -904,21 +910,18 @@ function setLayer(name, on) {
   if (name === "satellite") showSatellite(on);
   if (name === "moto") showMoto(on);
   if (name === "zones") showZones(on);
+  syncLegend();
 }
 
 function openLayers() {
   clearSelection();
   $("sheet-body").innerHTML = `
     <h2>Map layers</h2>
-    <div class="sub">Tap a colour in the legend to hide or show that kind of bay.</div>
+    <div class="sub">Tap a colour in the legend to hide or show that kind of bay, including motorcycle bays.</div>
     <div class="switches">
       <label class="switch">
         <input type="checkbox" data-layer="satellite"${view.satellite ? " checked" : ""}>
         <span><b>Satellite</b><small>Aerial photos under the bays. They can be a few years old.</small></span>
-      </label>
-      <label class="switch">
-        <input type="checkbox" data-layer="moto"${view.moto ? " checked" : ""}>
-        <span><b><i class="swatch" style="--c:var(--moto)"></i>Motorcycle bays</b><small>Free for solo motorcycles</small></span>
       </label>
       <label class="switch">
         <input type="checkbox" data-layer="zones"${view.zones ? " checked" : ""}>
