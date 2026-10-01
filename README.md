@@ -92,7 +92,7 @@ python -m http.server 8765 --directory site               # then open http://loc
 
 ## Deployment
 
-The site is hosted on GitHub Pages at https://leskos.github.io/brighton-parking/.
+The site is hosted on GitHub Pages at https://brighton-parking.github.io/.
 
 `.github/workflows/deploy.yml` runs `scrape.py` and deploys `site/` (including fresh data):
 - on every push to `main`
