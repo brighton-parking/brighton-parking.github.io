@@ -31,11 +31,11 @@
     <ul id="q-suggest" class="suggest" hidden></ul>
     </div>
     <div class="bar">
-      <ul class="legend" aria-label="Legend">
-        <li><i style="--c:var(--free)"></i><span id="legend-free">Free</span></li>
-        <li><i style="--c:var(--pay)"></i>Pay</li>
-        <li><i style="--c:var(--shared)"></i>Pay / permit</li>
-        <li><i style="--c:var(--permit)"></i>Permit only</li>
+      <ul class="legend" aria-label="Legend. Tap a colour to hide or show those bays">
+        <li><button type="button" data-cat="free" aria-pressed="true"><i style="--c:var(--free)"></i><span id="legend-free">Free</span></button></li>
+        <li><button type="button" data-cat="pay" aria-pressed="true"><i style="--c:var(--pay)"></i>Pay</button></li>
+        <li><button type="button" data-cat="shared" aria-pressed="true"><i style="--c:var(--shared)"></i>Pay / permit</button></li>
+        <li><button type="button" data-cat="permit" aria-pressed="true"><i style="--c:var(--permit)"></i>Permit only</button></li>
       </ul>
     </div>
     <div class="bar">

@@ -5,13 +5,16 @@ const BRIGHTON = [-0.1372, 50.8262];
 const BASEMAP = "https://tiles.openfreemap.org/styles/positron";
 const DATA_URL = "data/parking_bays.geojson";
 const ZONES_URL = "data/unmapped_zones.geojson";   // controlled zones whose bays the council hasn't mapped yet
+const MOTO_URL = "data/motorcycle_bays.geojson";   // loaded only when motorcycle bays are switched on
+const BOUNDARIES_URL = "data/zone_boundaries.geojson";   // loaded only when zone boundaries are switched on
+const SATELLITE = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const DAY_NAME = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
 const WEEK = 7 * 1440;
 const POINTS_MAX_ZOOM = 15.5;   // below this, bays are drawn as dots; above, as shapes
 
 const css = getComputedStyle(document.documentElement);
-const COLOR = Object.fromEntries(["free", "pay", "shared", "permit", "unknown"].map(k => [k, css.getPropertyValue(`--${k}`).trim()]));
+const COLOR = Object.fromEntries(["free", "pay", "shared", "permit", "unknown", "moto", "zone"].map(k => [k, css.getPropertyValue(`--${k}`).trim()]));
 COLOR.mine = COLOR.free;
 
 const TYPE_TITLE = { paid: "Paid parking bay", permit: "Permit holders bay", shared: "Shared use bay" };
@@ -28,8 +31,10 @@ const $ = id => document.getElementById(id);
 const bays = new Map();         // id -> { p: properties, g: geometry, iv: [[start, end], ...] week-minute intervals | null, status }
 let prices = null;              // site/prices.json, if it loaded
 const unmapped = new Map();     // zone code -> { p: properties (from zones.json), g: geometry, iv }
+const motos = new Map();        // motorcycle bay id -> properties, once loaded
 let selectedId = null;
 let selectedZone = null;
+let selectedMoto = null;
 let searchMarker = null;
 
 // ---------------------------------------------------------------- my permit zone (saved on this device)
@@ -43,6 +48,19 @@ function permitCovers(p) {
   if (!myZone || !p.zone || p.type === "paid") return false;
   return p.zone.split("&").map(z => z.trim()).includes(myZone);
 }
+
+// ---------------------------------------------------------------- view preferences (saved on this device)
+
+const VIEW_STORE = "brighton-parking-view";
+const view = { hidden: [], satellite: false, moto: false, zones: false };   // hidden legend categories, map layer switches
+try { Object.assign(view, JSON.parse(localStorage.getItem(VIEW_STORE)) || {}); } catch { /* storage may be unavailable */ }
+function saveView() {
+  try { localStorage.setItem(VIEW_STORE, JSON.stringify(view)); } catch { /* optional */ }
+}
+
+/** Legend category for a bay status: bays your permit covers sit under "Free". */
+const category = status => (status === "mine" ? "free" : status);
+const planActive = () => typeof planner !== "undefined" && planner.active;
 
 // ---------------------------------------------------------------- time (always Europe/London)
 
@@ -182,13 +200,28 @@ const geolocate = new maplibregl.GeolocateControl({
 map.addControl(geolocate, "bottom-right");
 geolocate.on("error", () => toast("Couldn't get your location"));
 
-fetch("prices.json").then(r => r.ok ? r.json() : null).then(j => { prices = j; }).catch(() => {});
+map.addControl({
+  onAdd() {
+    const div = document.createElement("div");
+    div.className = "maplibregl-ctrl maplibregl-ctrl-group";
+    div.innerHTML = `<button type="button" aria-label="Map layers" title="Map layers">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 3 2.5 8 12 13l9.5-5L12 3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m2.5 12.5 9.5 5 9.5-5M2.5 16.5l9.5 5 9.5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+    </button>`;
+    div.querySelector("button").addEventListener("click", openLayers);
+    return div;
+  },
+  onRemove() {},
+}, "bottom-right");
 
-const dataReady = fetch(DATA_URL).then(r => {
+// "no-cache" still uses the browser's copy, but checks with the server first that it's current.
+const FRESH = { cache: "no-cache" };
+fetch("prices.json", FRESH).then(r => r.ok ? r.json() : null).then(j => { prices = j; }).catch(() => {});
+
+const dataReady = fetch(DATA_URL, FRESH).then(r => {
   if (!r.ok) throw new Error(r.status);
   return r.json();
 });
-const zonesReady = fetch(ZONES_URL).then(r => r.ok ? r.json() : null).catch(() => null);
+const zonesReady = fetch(ZONES_URL, FRESH).then(r => r.ok ? r.json() : null).catch(() => null);
 
 map.on("load", async () => {
   let fc;
@@ -213,13 +246,15 @@ map.on("load", async () => {
     "free", COLOR.free, "mine", COLOR.free, "pay", COLOR.pay, "shared", COLOR.shared, "permit", COLOR.permit, COLOR.unknown];
   const beforeLabels = map.getStyle().layers.find(l => l.type === "symbol")?.id;
 
+  // Bays in a category switched off in the legend are drawn fully transparent.
+  const shown = v => ["case", ["boolean", ["feature-state", "hidden"], false], 0, v];
   map.addLayer({
     id: "bays-fill", type: "fill", source: "bays", minzoom: POINTS_MAX_ZOOM - 0.5,
-    paint: { "fill-color": color, "fill-opacity": 0.55 },
+    paint: { "fill-color": color, "fill-opacity": shown(0.55) },
   }, beforeLabels);
   map.addLayer({
     id: "bays-line", type: "line", source: "bays", minzoom: POINTS_MAX_ZOOM - 0.5,
-    paint: { "line-color": color, "line-width": ["interpolate", ["linear"], ["zoom"], 15, 1, 19, 2.5] },
+    paint: { "line-color": color, "line-opacity": shown(1), "line-width": ["interpolate", ["linear"], ["zoom"], 15, 1, 19, 2.5] },
   }, beforeLabels);
   map.addLayer({
     id: "bays-selected", type: "line", source: "bays",
@@ -233,16 +268,25 @@ map.on("load", async () => {
     id: "bays-points", type: "circle", source: "points", maxzoom: POINTS_MAX_ZOOM,
     paint: {
       "circle-color": color,
+      "circle-opacity": shown(1),
+      "circle-stroke-opacity": shown(1),
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 1.5, 13, 2.5, 15.5, 5],
       "circle-stroke-color": "#fff",
       "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 12, 0, 14, 0.8],
     },
   });
 
+  if (view.satellite) showSatellite(true);
+  if (view.moto) showMoto(true);
+  if (view.zones) showZones(true);
   refresh();
   updatePermitChrome();
   setInterval(refresh, 30 * 1000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    refresh();
+    reloadIfDataChanged();
+  });
   $("loading").hidden = true;
   $("plan-btn").hidden = false;
 
@@ -251,6 +295,25 @@ map.on("load", async () => {
     .then(s => { if (s.state === "granted") geolocate.trigger(); })
     .catch(() => {});
 });
+
+// ---------------------------------------------------------------- picking up new data
+// A home-screen app can stay open for days. When it comes back into view, check whether the
+// data has been rebuilt since it loaded, and reload if so (unless a card or plan is open).
+
+const METADATA_URL = "data/metadata.json";
+const loadedData = fetch(METADATA_URL, FRESH).then(r => r.ok ? r.json() : null).then(m => m?.fetched_at).catch(() => null);
+let lastDataCheck = Date.now();
+
+async function reloadIfDataChanged() {
+  if (Date.now() - lastDataCheck < 10 * 60 * 1000) return;   // at most every 10 minutes
+  lastDataCheck = Date.now();
+  try {
+    const [was, now] = await Promise.all([loadedData,
+      fetch(METADATA_URL, { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(m => m?.fetched_at)]);
+    const busy = !$("sheet").hidden || planActive() || document.activeElement?.matches?.("input, select");
+    if (was && now && now !== was && !busy) location.reload();
+  } catch { /* offline: keep what we have */ }
+}
 
 /** Hatch the zones whose bays aren't in the data, so an empty patch of map doesn't read as "no restrictions". */
 function addUnmappedZones(fc, before) {
@@ -277,11 +340,12 @@ function addUnmappedZones(fc, before) {
 function refresh() {
   const wm = weekMinute();
   for (const [id, bay] of bays) {
-    const s = statusOf(bay, wm);
-    if (s !== bay.status) {
+    const s = statusOf(bay, wm), hidden = view.hidden.includes(category(s));
+    if (s !== bay.status || hidden !== bay.hidden) {
       bay.status = s;
-      map.setFeatureState({ source: "bays", id }, { status: s });
-      map.setFeatureState({ source: "points", id }, { status: s });
+      bay.hidden = hidden;
+      map.setFeatureState({ source: "bays", id }, { status: s, hidden });
+      map.setFeatureState({ source: "points", id }, { status: s, hidden });
     }
   }
   $("clock").textContent = `Now · ${DAY_NAME[DAYS[Math.floor(wm / 1440)]]} ${clock(wm % 1440)}`;
@@ -291,13 +355,20 @@ function refresh() {
 
 // ---------------------------------------------------------------- tapping a bay
 
+const isMoto = f => f.layer.id.startsWith("moto");
+
 map.on("click", e => {
   const { x, y } = e.point;
+  const withMotos = view.moto && map.getLayer("moto-fill");
+  const fills = withMotos ? ["bays-fill", "moto-fill"] : ["bays-fill"];
+  const dots = withMotos ? ["bays-points", "moto-points"] : ["bays-points"];
+  // Bays switched off in the legend can't be tapped (a plan shows every bay, so they can then).
+  const visible = f => isMoto(f) || planActive() || !bays.get(f.properties.id).hidden;
   // A tap squarely inside a bay wins; otherwise take the nearest bay within a finger's width.
-  let hits = map.queryRenderedFeatures(e.point, { layers: ["bays-fill"] });
+  let hits = map.queryRenderedFeatures(e.point, { layers: fills }).filter(visible);
   if (!hits.length) {
     const pad = 18;
-    hits = map.queryRenderedFeatures([[x - pad, y - pad], [x + pad, y + pad]], { layers: ["bays-fill", "bays-points"] });
+    hits = map.queryRenderedFeatures([[x - pad, y - pad], [x + pad, y + pad]], { layers: [...fills, ...dots] }).filter(visible);
   }
   if (!hits.length) {
     const zone = map.getLayer("zones-fill") && map.queryRenderedFeatures(e.point, { layers: ["zones-fill"] })[0];
@@ -306,11 +377,11 @@ map.on("click", e => {
 
   let best = null, bestD = Infinity;
   for (const f of hits) {
-    const c = map.project(bays.get(f.properties.id).p.centroid);
+    const c = map.project(isMoto(f) ? motos.get(f.properties.id).centroid : bays.get(f.properties.id).p.centroid);
     const d = (c.x - x) ** 2 + (c.y - y) ** 2;
-    if (d < bestD) { bestD = d; best = f.properties.id; }
+    if (d < bestD) { bestD = d; best = f; }
   }
-  select(best);
+  isMoto(best) ? selectMoto(best.properties.id) : select(best.properties.id);
 });
 
 for (const layer of ["bays-fill", "bays-points", "zones-fill"]) {
@@ -318,10 +389,16 @@ for (const layer of ["bays-fill", "bays-points", "zones-fill"]) {
   map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
 }
 
-function select(id) {
+/** Forget whichever bay, zone or motorcycle bay the sheet was showing. */
+function clearSelection() {
   if (selectedId) map.setFeatureState({ source: "bays", id: selectedId }, { selected: false });
+  if (selectedMoto) map.setFeatureState({ source: "moto", id: selectedMoto }, { selected: false });
+  selectedId = selectedZone = selectedMoto = null;
+}
+
+function select(id) {
+  clearSelection();
   selectedId = id;
-  selectedZone = null;
   map.setFeatureState({ source: "bays", id }, { selected: true });
   renderSheet(id);
 
@@ -333,16 +410,22 @@ function select(id) {
 }
 
 function closeSheet() {
-  const wasBay = ["bay", "zone"].includes($("sheet").dataset.view);
-  if (selectedId) map.setFeatureState({ source: "bays", id: selectedId }, { selected: false });
-  selectedId = null;
-  selectedZone = null;
+  const wasBay = ["bay", "zone", "moto"].includes($("sheet").dataset.view);
+  clearSelection();
   // With a plan active, closing a bay card goes back to the plan results.
   if (wasBay && typeof planner !== "undefined" && planner.active) return showPlanResults();
   $("sheet").hidden = true;
 }
 $("sheet-close").addEventListener("click", closeSheet);
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
+
+/** Directions to a point in Apple Maps on Apple devices, Google Maps elsewhere. */
+function directionsUrl([lon, lat]) {
+  const isApple = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent) && "ontouchend" in document;
+  return isApple
+    ? `https://maps.apple.com/?daddr=${lat},${lon}`
+    : `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`;
+}
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -405,11 +488,7 @@ function renderSheet(id) {
       <button class="btn" data-copy="${esc(p.pay_by_phone)}">Copy</button></span>`]);
 
   const fromOrder = p.source === "traffic_order";
-  const [lon, lat] = p.centroid;
-  const isApple = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent) && "ontouchend" in document;
-  const directions = isApple
-    ? `https://maps.apple.com/?daddr=${lat},${lon}`
-    : `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`;
+  const directions = directionsUrl(p.centroid);
 
   $("sheet-body").innerHTML = `
     ${typeof planCardTop === "function" ? planCardTop(id) : ""}
@@ -434,8 +513,7 @@ function renderSheet(id) {
 // ---------------------------------------------------------------- tapping a zone with no mapped bays
 
 function selectZone(code) {
-  if (selectedId) map.setFeatureState({ source: "bays", id: selectedId }, { selected: false });
-  selectedId = null;
+  clearSelection();
   selectedZone = code;
   renderZoneSheet(code);
 }
@@ -585,12 +663,11 @@ function updatePermitChrome() {
   $("permit-btn").classList.toggle("on", !!myZone);
   const free = $("legend-free");
   if (free) free.textContent = myZone ? "Free / your permit" : "Free";
+  syncLegend();
 }
 
 function openPermitPicker() {
-  if (selectedId) map.setFeatureState({ source: "bays", id: selectedId }, { selected: false });
-  selectedId = null;
-  selectedZone = null;
+  clearSelection();
   const zones = allZones();
   $("sheet-body").innerHTML = `
     <h2>My permit zone</h2>
@@ -627,4 +704,232 @@ $("permit-btn").addEventListener("click", openPermitPicker);
 $("sheet-body").addEventListener("click", e => {
   const z = e.target.closest("[data-zone]");
   if (z) setMyZone(z.dataset.zone);
+});
+
+// ---------------------------------------------------------------- legend filter
+
+const LEGEND_NAME = { free: "free", pay: "pay", shared: "pay or permit", permit: "permit-only" };
+
+function syncLegend() {
+  for (const b of document.querySelectorAll(".legend [data-cat]")) {
+    const off = view.hidden.includes(b.dataset.cat);
+    b.classList.toggle("off", off);
+    b.setAttribute("aria-pressed", String(!off));
+  }
+}
+
+function toggleCategory(cat) {
+  const off = !view.hidden.includes(cat);
+  view.hidden = off ? [...view.hidden, cat] : view.hidden.filter(c => c !== cat);
+  saveView();
+  syncLegend();
+  refresh();
+  if (selectedId && bays.get(selectedId).hidden) closeSheet();
+  toast(off ? `Hiding ${LEGEND_NAME[cat]} bays. Tap again to show them` : `Showing ${LEGEND_NAME[cat]} bays`);
+}
+
+document.querySelector(".legend").addEventListener("click", e => {
+  const b = e.target.closest("[data-cat]");
+  if (b) toggleCategory(b.dataset.cat);
+});
+
+// ---------------------------------------------------------------- map layers: satellite and motorcycle bays
+
+/** Our lowest layer, so the satellite goes under everything we draw but over the basemap. */
+function firstOwnLayer() {
+  const own = ["plan-area-fill", "plan-area-line", "zones-fill", "zones-line", "bays-fill"];
+  return map.getStyle().layers.find(l => own.includes(l.id))?.id;
+}
+
+function showSatellite(on) {
+  if (on && !map.getSource("satellite")) {
+    map.addSource("satellite", {
+      type: "raster", tiles: [SATELLITE], tileSize: 256, maxzoom: 19,
+      attribution: 'Imagery © <a href="https://www.esri.com" target="_blank" rel="noopener">Esri</a>, Maxar, Earthstar Geographics',
+    });
+    map.addLayer({ id: "satellite", type: "raster", source: "satellite" }, firstOwnLayer());
+  }
+  if (map.getLayer("satellite")) map.setLayoutProperty("satellite", "visibility", on ? "visible" : "none");
+}
+
+const MOTO_LAYERS = ["moto-fill", "moto-line", "moto-selected", "moto-points"];
+let motoLoading = null;
+
+async function showMoto(on) {
+  if (on && !map.getSource("moto")) {
+    motoLoading ??= fetch(MOTO_URL, FRESH).then(r => {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    });
+    let fc;
+    try {
+      fc = await motoLoading;
+    } catch {
+      motoLoading = null;
+      toast("Couldn't load motorcycle bays");
+      return setLayer("moto", false);
+    }
+    if (!map.getSource("moto")) addMotoLayers(fc);
+  }
+  for (const id of MOTO_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+  if (!on && selectedMoto) closeSheet();
+}
+
+function addMotoLayers(fc) {
+  const points = { type: "FeatureCollection", features: [] };
+  for (const f of fc.features) {
+    motos.set(f.properties.id, f.properties);
+    points.features.push({ type: "Feature", properties: { id: f.properties.id }, geometry: { type: "Point", coordinates: f.properties.centroid } });
+  }
+  map.addSource("moto", { type: "geojson", data: fc, promoteId: "id" });
+  map.addSource("moto-points", { type: "geojson", data: points, promoteId: "id" });
+  const beforeLabels = map.getStyle().layers.find(l => l.type === "symbol")?.id;
+  map.addLayer({
+    id: "moto-fill", type: "fill", source: "moto", minzoom: POINTS_MAX_ZOOM - 0.5,
+    paint: { "fill-color": COLOR.moto, "fill-opacity": 0.6 },
+  }, beforeLabels);
+  map.addLayer({
+    id: "moto-line", type: "line", source: "moto", minzoom: POINTS_MAX_ZOOM - 0.5,
+    paint: { "line-color": COLOR.moto, "line-width": ["interpolate", ["linear"], ["zoom"], 15, 1, 19, 2.5] },
+  }, beforeLabels);
+  map.addLayer({
+    id: "moto-selected", type: "line", source: "moto",
+    paint: { "line-color": "#111", "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 3.5, 0] },
+  });
+  map.addLayer({
+    id: "moto-points", type: "circle", source: "moto-points", maxzoom: POINTS_MAX_ZOOM,
+    paint: {
+      "circle-color": COLOR.moto,
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 1.5, 13, 2.5, 15.5, 5],
+      "circle-stroke-color": "#fff",
+      "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 12, 0, 14, 0.8],
+    },
+  });
+  for (const layer of ["moto-fill", "moto-points"]) {
+    map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
+  }
+}
+
+function selectMoto(id) {
+  clearSelection();
+  selectedMoto = id;
+  map.setFeatureState({ source: "moto", id }, { selected: true });
+  const p = motos.get(id);
+  const when = !p.times_raw ? "Check the sign for times" : /^at any time$/i.test(p.times_raw) ? "At any time" : p.times_raw;
+  $("sheet-body").innerHTML = `
+    <h2>Motorcycle bay</h2>
+    <div class="sub">${p.zone ? `Zone ${esc(p.zone)}` : "Outside the parking zones"}</div>
+    <div class="status" style="--c:${COLOR.moto}">
+      <i></i><div><b>Free for motorcycles</b><span>${esc(when)}</span></div>
+    </div>
+    <dl class="facts">
+      <dt>Who</dt><dd>Solo motorcycles only. Trikes can't use these, but can use paid bays.</dd>
+      <dt>Elsewhere</dt><dd>Motorcycles can't park in permit or paid bays, even with a paid session.</dd>
+    </dl>
+    <div class="actions"><a class="btn primary" href="${directionsUrl(p.centroid)}" target="_blank" rel="noopener">Directions</a></div>
+    <p class="fine">From Brighton & Hove City Council data and its
+      <a href="https://www.brighton-hove.gov.uk/parking-and-travel/parking/motorcycle-bay" target="_blank" rel="noopener">motorcycle bay rules</a>.
+      Signs on the street always take precedence.</p>`;
+  $("sheet").dataset.view = "moto";
+  $("sheet").hidden = false;
+}
+
+const ZONE_LAYERS = ["zone-casing", "zone-lines", "zone-labels"];
+let zonesLoading = null;
+
+async function showZones(on) {
+  if (on && !map.getSource("zone-boundaries")) {
+    zonesLoading ??= fetch(BOUNDARIES_URL, FRESH).then(r => {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    });
+    let fc;
+    try {
+      fc = await zonesLoading;
+    } catch {
+      zonesLoading = null;
+      toast("Couldn't load zone boundaries");
+      return setLayer("zones", false);
+    }
+    if (!map.getSource("zone-boundaries")) addZoneLayers(fc);
+  }
+  for (const id of ZONE_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+}
+
+function addZoneLayers(fc) {
+  const labels = {
+    type: "FeatureCollection",
+    features: fc.features.map(f => ({
+      type: "Feature",
+      properties: { label: f.properties.event_day ? `Zone ${f.properties.zone} (event days)` : `Zone ${f.properties.zone}` },
+      geometry: { type: "Point", coordinates: f.properties.label_point },
+    })),
+  };
+  map.addSource("zone-boundaries", { type: "geojson", data: fc });
+  map.addSource("zone-label-points", { type: "geojson", data: labels });
+  // Use the basemap's own font, so the labels need no extra downloads.
+  const fonts = map.getStyle().layers.map(l => l.layout?.["text-font"]).filter(Array.isArray);
+  const font = fonts.find(f => f.some(n => /bold/i.test(n))) || fonts[0] || ["Noto Sans Regular"];
+  const beforeLabels = map.getStyle().layers.find(l => l.type === "symbol")?.id;
+  // A white casing keeps the outline visible on the satellite too.
+  map.addLayer({
+    id: "zone-casing", type: "line", source: "zone-boundaries",
+    paint: { "line-color": "#fff", "line-opacity": 0.8, "line-width": ["interpolate", ["linear"], ["zoom"], 11, 3, 16, 5.5] },
+  }, beforeLabels);
+  map.addLayer({
+    id: "zone-lines", type: "line", source: "zone-boundaries",
+    paint: {
+      "line-color": COLOR.zone, "line-opacity": 0.85,
+      "line-width": ["interpolate", ["linear"], ["zoom"], 11, 1.2, 16, 2.5],
+      "line-dasharray": ["case", ["get", "event_day"], ["literal", [2, 2]], ["literal", [1, 0]]],
+    },
+  }, beforeLabels);
+  map.addLayer({
+    id: "zone-labels", type: "symbol", source: "zone-label-points",
+    layout: {
+      "text-field": ["get", "label"], "text-font": font,
+      "text-size": ["interpolate", ["linear"], ["zoom"], 11, 11, 16, 15],
+      "text-allow-overlap": false,
+    },
+    paint: { "text-color": COLOR.zone, "text-halo-color": "#fff", "text-halo-width": 1.8 },
+  });
+}
+
+function setLayer(name, on) {
+  view[name] = on;
+  saveView();
+  const box = document.querySelector(`#sheet-body [data-layer="${name}"]`);
+  if (box) box.checked = on;
+  if (name === "satellite") showSatellite(on);
+  if (name === "moto") showMoto(on);
+  if (name === "zones") showZones(on);
+}
+
+function openLayers() {
+  clearSelection();
+  $("sheet-body").innerHTML = `
+    <h2>Map layers</h2>
+    <div class="sub">Tap a colour in the legend to hide or show that kind of bay.</div>
+    <div class="switches">
+      <label class="switch">
+        <input type="checkbox" data-layer="satellite"${view.satellite ? " checked" : ""}>
+        <span><b>Satellite</b><small>Aerial photos under the bays. They can be a few years old.</small></span>
+      </label>
+      <label class="switch">
+        <input type="checkbox" data-layer="moto"${view.moto ? " checked" : ""}>
+        <span><b><i class="swatch" style="--c:var(--moto)"></i>Motorcycle bays</b><small>Free for solo motorcycles</small></span>
+      </label>
+      <label class="switch">
+        <input type="checkbox" data-layer="zones"${view.zones ? " checked" : ""}>
+        <span><b>Zone boundaries</b><small>Outlines and letters of the controlled parking zones</small></span>
+      </label>
+    </div>`;
+  $("sheet").dataset.view = "layers";
+  $("sheet").hidden = false;
+}
+
+$("sheet-body").addEventListener("change", e => {
+  const box = e.target.closest("[data-layer]");
+  if (box) setLayer(box.dataset.layer, box.checked);
 });

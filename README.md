@@ -14,6 +14,8 @@ A free, mobile-friendly map of every on-street paid, permit and shared-use parki
 - **Plan a stay.** Choose where you're going, the date, your arrival time and how long you'll stay. The app lists the cheapest bays nearby where you could legally stay the whole time without moving the car. It takes into account charging hours, maximum stays, permit hours and seasonal seafront prices.
 - **Set your permit zone.** If you have a resident permit, choose your zone. Bays your permit covers are then shown as available, and the planner counts them as free. This is saved on your device only.
 - **New zones are covered.** Where the council has started a new parking zone but not yet published where its bays are, the area is hatched. Tap it to see the zone's hours and rules. For South Hollingdean (Zone 14), the bays have been drawn from the council's traffic order instead, so their positions are approximate.
+- **Filter the map.** Tap a colour in the legend to hide or show that kind of bay.
+- **Map layers.** The layers button (bottom right) switches on satellite photos, motorcycle bays (free for solo motorcycles), and the parking zone boundaries with their letters. Your choices are saved on your device.
 - **Install it like an app.** On your phone, use "Add to Home Screen".
 
 ## Please check the signs
@@ -27,6 +29,7 @@ The map covers council on-street bays only. It doesn't include car parks, single
 - **Parking bays:** [Brighton & Hove City Council](https://www.brighton-hove.gov.uk/parking), from the public data behind their [On-Street Parking Information map](https://experience.arcgis.com/experience/bc9e3e192b794c268d144192a53939c6). It's refreshed every Monday.
 - **Prices:** the council's [paid parking zone prices](https://www.brighton-hove.gov.uk/parking/street-parking/paid-parking-zone-prices).
 - **Map:** [OpenFreeMap](https://openfreemap.org), © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors.
+- **Satellite photos:** © [Esri](https://www.esri.com), Maxar, Earthstar Geographics.
 - **Search:** [Photon](https://photon.komoot.io), [Nominatim](https://nominatim.openstreetmap.org) and [postcodes.io](https://postcodes.io).
 
 This is an independent project. It isn't affiliated with or endorsed by Brighton & Hove City Council.

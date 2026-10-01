@@ -20,12 +20,15 @@ python scrape.py      # stdlib only, ~30s; re-run any time to refresh
 | Paid Parking Only | `.../Parking/MBTRO/FeatureServer/57` | `paid` |
 | Permit Holders Only | `.../Parking/MBTRO/FeatureServer/60` | `permit` |
 | Shared Permit Or Paid | `.../Parking/MBTRO/FeatureServer/62` | `shared` |
-| Parking Zones (boundaries) | `.../Parking/Parking_ParkingZones/FeatureServer/39` | used for `unmapped_zones.geojson` |
+| Motorcycle Bay | `.../Parking/MBTRO/FeatureServer/55` | written to `motorcycle_bays.geojson` |
+| Parking Zones (boundaries) | `.../Parking/Parking_ParkingZones/FeatureServer/39` | written to `zone_boundaries.geojson` and `unmapped_zones.geojson` |
 
 ## Outputs (`data/`)
 
 - **`parking_bays.geojson`**: every bay as a polygon (WGS84, 6 dp) with the cleaned properties below. Loads directly into Leaflet or MapLibre.
 - **`parking_bays.csv`**: the same properties without geometry, plus centroid `lat`/`lon`. Useful for lists, search, or a spreadsheet.
+- **`motorcycle_bays.geojson`**: motorcycle bays (shape, zone, hours, centroid). The app loads it only when they're switched on.
+- **`zone_boundaries.geojson`**: every zone's outline, with `label_point` (the point inside it furthest from any edge, so labels never fall outside an odd-shaped zone) and `event_day` for the stadium areas B and D.
 - **`unmapped_zones.geojson`**: controlled parking zones whose boundary exists but which have no bays in the data, with any notes from `site/zones.json` merged into their properties. See "Zones with no mapped bays" below.
 - **`metadata.json`**: fetch time, counts, unmapped zones, and every record that needed an assumption or couldn't be parsed.
 - **`raw/*.json`**: the records exactly as the council serves them (Esri JSON, British National Grid).
@@ -86,6 +89,8 @@ A bay is restricted when the current weekday is in `days` and `start <= now < en
   - A bay is ruled out if any one session is longer than its max stay.
   - Seasonal prices use the planned date.
   - Distance is a straight line to the nearest edge of the bay.
+- **Legend filter and map layers**: tapping a legend colour hides that status (bays get a `hidden` feature-state and paint at zero opacity, and can't be tapped); a plan shows every bay with its own legend, then the filter comes back. The layers button opens switches for satellite (Esri World Imagery, under our layers and over the basemap), motorcycle bays and zone boundaries; the last two load their data on first use. The filter and switches are saved in `localStorage` (`brighton-parking-view`).
+- **Picking up new data**: data files are fetched with `cache: "no-cache"` (revalidated, so a 304 when unchanged). When the app comes back into view (at most every 10 minutes), it compares `metadata.json`'s `fetched_at` with what it loaded and reloads if the data was rebuilt, unless a card or plan is open. Home-screen apps can otherwise sit on old data for days.
 - **My permit zone**: the chip next to the time lets you pick your permit zone. It's saved in this browser only. Permit-only and shared-use bays in that zone (including joint zones like `N&R`) turn green while restricted, their cards say your permit covers them, and Plan a stay counts them as free with no time limit. That's an assumption about how shared bays treat permit holders, and the planner says so.
 - **Prices** (`prices.json`): the council's current £ rates, copied by hand from its [per-zone price pages](https://www.brighton-hove.gov.uk/parking/street-parking/paid-parking-zone-prices). `scrape.py` gives each paid or shared bay a `price_band`, matching by PayByPhone code first (seafront and Kingsway bays have their own seasonal rates) and then by tariff (Low/Medium/High). The card shows rates up to the bay's max stay. **When the council changes prices, edit `prices.json` and update `checked`.**
 - **Zones with no mapped bays** (`zones.json`): `scrape.py` compares the council's zone boundaries with the zones the bays belong to, and writes any zone with no bays to `unmapped_zones.geojson`. The map hatches these zones. Tapping one shows a card with its hours, current status and rules, the permit picker lists it, and Plan a stay warns when one is within the search distance. `zones.json` is hand-maintained from the zone's traffic order: `name`, `since`, `schedule` (same format as a bay's), `facts` (label/text pairs), `price_band` + `max_stay_mins` for the price table, and `source`. Zones under `skip` (the stadium event-day areas B and D) never have regular bays and aren't flagged. **Once the council adds a zone's bays, the scrape stops flagging it automatically, and its entry in `zones.json` can be deleted.**

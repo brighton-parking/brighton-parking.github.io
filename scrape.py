@@ -10,6 +10,8 @@ Outputs (in ./data):
   parking_bays.csv          same attributes, no geometry (centroid lat/lon)
   metadata.json             source URLs, fetch time, counts, parse issues
   unmapped_zones.geojson    controlled parking zones with no bays in the data yet (e.g. a new zone)
+  motorcycle_bays.geojson   motorcycle bays (free, solo motorcycles only), shown on request
+  zone_boundaries.geojson   every controlled parking zone's outline, with a point to label it at
 Bays drawn by hand from a traffic order (manual/<zone>/bays.geojson, see tools/build_tro_bays.py)
 are added for any zone the council's data has no bays for yet.
 and copies parking_bays.geojson, unmapped_zones.geojson + metadata.json into site/data for the web app.
@@ -32,6 +34,7 @@ LAYERS = {
     60: "permit",   # Permit Holders Only
     62: "shared",   # Shared Permit Or Paid Parking
 }
+MOTORCYCLE_LAYER = 55   # Motorcycle Bay
 ZONES_SERVICE = "https://gis.brighton-hove.gov.uk/server/rest/services/Parking/Parking_ParkingZones/FeatureServer"
 ZONES_LAYER = 39   # Parking Zones (boundaries)
 PAGE = 1000
@@ -355,12 +358,69 @@ def normalise(feature, bay_type):
     return {"type": "Feature", "id": props["id"], "geometry": geom, "properties": props}
 
 
-def unmapped_zones(bay_features, notes):
+def label_point(geom):
+    """A point well inside a zone to put its label: the grid point furthest from any edge.
+
+    A centroid can fall outside an L-shaped or crescent zone; this can't.
+    """
+    polys = [geom["coordinates"]] if geom["type"] == "Polygon" else geom["coordinates"]
+    poly = max(polys, key=lambda p: len(p[0]))
+    lat0 = sum(y for _, y in poly[0]) / len(poly[0])
+    kx = math.cos(math.radians(lat0))       # make a degree of longitude as long as one of latitude
+    rings = [[(x * kx, y) for x, y in ring] for ring in poly]
+    xs, ys = [x for x, _ in rings[0]], [y for _, y in rings[0]]
+
+    def inside(px, py):
+        hit = False
+        for ring in rings:
+            for (x1, y1), (x2, y2) in zip(ring, ring[1:]):
+                if (y1 > py) != (y2 > py) and px < (x2 - x1) * (py - y1) / (y2 - y1) + x1:
+                    hit = not hit
+        return hit
+
+    def edge_dist(px, py):
+        best = math.inf
+        for ring in rings:
+            for (x1, y1), (x2, y2) in zip(ring, ring[1:]):
+                dx, dy = x2 - x1, y2 - y1
+                t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy or 1e-18)))
+                best = min(best, math.hypot(px - x1 - t * dx, py - y1 - t * dy))
+        return best
+
+    best, n = None, 24
+    for i in range(n + 1):
+        for j in range(n + 1):
+            px = min(xs) + (max(xs) - min(xs)) * i / n
+            py = min(ys) + (max(ys) - min(ys)) * j / n
+            if inside(px, py):
+                d = edge_dist(px, py)
+                if best is None or d > best[0]:
+                    best = (d, px, py)
+    if best is None:
+        return centroid(geom)
+    return [round(best[1] / kx, 6), round(best[2], 6)]
+
+
+def zone_boundaries(raw, notes):
+    """Every zone's outline for the map's zone layer. Event-day areas are flagged, as they overlap others."""
+    out = []
+    for feature in raw["features"]:
+        code = clean(feature["attributes"].get("ZoneCode"))
+        if not code or not feature.get("geometry"):
+            continue
+        f = esri_to_geojson(feature)
+        f["geometry"]["coordinates"] = round_coords(f["geometry"]["coordinates"], 5)
+        f["id"] = code
+        f["properties"] = {"zone": code, "event_day": code in notes["skip"], "label_point": label_point(f["geometry"])}
+        out.append(f)
+    return out
+
+
+def unmapped_zones(raw, bay_features, notes):
     """Zone boundaries that contain no mapped bays, e.g. a new zone the council hasn't drawn bays for yet.
 
     Zones listed under "skip" in zones.json (event-day areas) never have regular bays, so they're left out.
     """
-    raw = fetch_layer(ZONES_LAYER, ZONES_SERVICE)
     zoned = {z.strip() for f in bay_features for z in (f["properties"]["zone"] or "").split("&")}
     out = []
     for feature in raw["features"]:
@@ -386,6 +446,28 @@ def traffic_order_bays(council_features):
             continue
         out.extend(fc["features"])
         print(f"  zone {fc['zone']}: {len(fc['features'])} bays drawn from {fc['order']}", flush=True)
+    return out
+
+
+def motorcycle_bays():
+    """Motorcycle bays: just the shape, zone and hours. The app loads them only when switched on."""
+    raw = fetch_layer(MOTORCYCLE_LAYER)
+    out = []
+    for feature in raw["features"]:
+        if not feature.get("geometry"):
+            continue
+        f = esri_to_geojson(feature)
+        a = {k.lower(): v for k, v in feature["attributes"].items()}
+        f["geometry"]["coordinates"] = round_coords(f["geometry"]["coordinates"])
+        f["id"] = f"moto-{a['objectid']}"
+        zone = clean(a.get("zone"))
+        f["properties"] = {
+            "id": f["id"],
+            "zone": None if zone in ("OUT", "NA") else zone,
+            "times_raw": clean(a.get("times")),
+            "centroid": centroid(f["geometry"]),
+        }
+        out.append(f)
     return out
 
 
@@ -416,8 +498,19 @@ def main():
     fc = {"type": "FeatureCollection", "features": all_features}
     (OUT / "parking_bays.geojson").write_text(json.dumps(fc, separators=(",", ":")), encoding="utf-8")
 
+    print(f"fetching layer {MOTORCYCLE_LAYER} (motorcycle) ...", flush=True)
+    motos = motorcycle_bays()
+    counts["motorcycle"] = len(motos)
+    (OUT / "motorcycle_bays.geojson").write_text(
+        json.dumps({"type": "FeatureCollection", "features": motos}, separators=(",", ":")), encoding="utf-8")
+    print(f"  {len(motos)} bays", flush=True)
+
     print("fetching zone boundaries ...", flush=True)
-    zones = unmapped_zones(all_features, json.loads(ZONES.read_text(encoding="utf-8")))
+    raw_zones = fetch_layer(ZONES_LAYER, ZONES_SERVICE)
+    notes = json.loads(ZONES.read_text(encoding="utf-8"))
+    boundaries = {"type": "FeatureCollection", "features": zone_boundaries(raw_zones, notes)}
+    (OUT / "zone_boundaries.geojson").write_text(json.dumps(boundaries, separators=(",", ":")), encoding="utf-8")
+    zones = unmapped_zones(raw_zones, all_features, notes)
     zfc = {"type": "FeatureCollection", "features": zones}
     (OUT / "unmapped_zones.geojson").write_text(json.dumps(zfc, separators=(",", ":")), encoding="utf-8")
     print(f"  zones with no mapped bays: {', '.join(f['id'] for f in zones) or 'none'}", flush=True)
@@ -449,7 +542,8 @@ def main():
     }
     (OUT / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     SITE_DATA.mkdir(parents=True, exist_ok=True)
-    for name in ("parking_bays.geojson", "unmapped_zones.geojson", "metadata.json"):
+    for name in ("parking_bays.geojson", "unmapped_zones.geojson", "motorcycle_bays.geojson", "zone_boundaries.geojson",
+                 "metadata.json"):
         shutil.copy(OUT / name, SITE_DATA / name)
     print(f"done: {len(all_features)} bays, {len(issue_log)} flagged -> {OUT}")
 
